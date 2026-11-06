@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ajedrez - 2 Jugadores</title>
+<style>
+    :root {
+        --casilla: min(11vw, 72px);
+        --clara: #f0d9b5;
+        --oscura: #b58863;
+    }
+    * { box-sizing: border-box; }
+    body {
+        font-family: system-ui, Arial, sans-serif;
+        background: #0b1d51;
+        color: #fff;
+        text-align: center;
+        margin: 0;
+        padding: 20px 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    h2 { margin: 0 0 10px; }
+
+    .capturadas {
+        min-height: 32px;
+        font-size: 24px;
+        letter-spacing: 1px;
+        line-height: 32px;
+    }
+
+    .board {
+        display: grid;
+        grid-template-columns: repeat(8, var(--casilla));
+        margin: 8px auto;
+        border: 4px solid #333;
+        box-shadow: 0 0 20px rgba(0,0,0,.5);
+    }
+
+    .cell {
+        width: var(--casilla);
+        height: var(--casilla);
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: calc(var(--casilla) * .72);
+        cursor: pointer;
+        user-select: none;
+        line-height: 1;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .cell.clara { background: var(--clara); }
+    .cell.oscura { background: var(--oscura); }
+
+    .pieza-blanca { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 2px #000; }
+    .pieza-negra  { color: #111; text-shadow: 0 0 1px #fff; }
+
+    .cell.ultimo::before {
+        content: ""; position: absolute; inset: 0;
+        background: rgba(255, 235, 59, .45);
+    }
+    .cell.selected::before {
+        content: ""; position: absolute; inset: 0;
+        background: rgba(76, 175, 80, .65);
+    }
+    .cell.jaque::before {
+        content: ""; position: absolute; inset: 0;
+        background: radial-gradient(circle, rgba(255,0,0,.85) 0%, rgba(255,0,0,0) 75%);
+    }
+    .cell.move::after {
+        content: ""; position: absolute;
+        width: 28%; height: 28%; border-radius: 50%;
+        background: rgba(0, 120, 0, .45);
+    }
+    .cell.captura::after {
+        content: ""; position: absolute; inset: 4%;
+        border-radius: 50%;
+        border: 5px solid rgba(0, 120, 0, .5);
+        background: none; width: auto; height: auto;
+    }
+    .cell > span.pz { position: relative; z-index: 1; }
+    .coord {
+        position: absolute; font-size: 11px; font-weight: bold;
+        opacity: .75; z-index: 1; font-family: Arial, sans-serif;
+    }
+    .coord.num { top: 2px; left: 3px; }
+    .coord.let { bottom: 1px; right: 3px; }
+    .clara .coord { color: var(--oscura); }
+    .oscura .coord { color: var(--clara); }
+
+    .info {
+        background: #1a2a6c;
+        padding: 15px 30px;
+        border-radius: 10px;
+        border: 2px solid #2a4aac;
+        margin-top: 10px;
+    }
+    #status { font-size: 22px; font-weight: bold; margin: 0 0 15px; color: #ffd700; }
+
+    button {
+        padding: 10px 20px;
+        font-size: 17px;
+        background: #1e90ff;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: background .3s;
+        margin: 0 4px;
+    }
+    button:hover { background: #00bfff; }
+    button:disabled { background: #556; cursor: not-allowed; }
+
+    #promo {
+        position: fixed; inset: 0; background: rgba(0,0,0,.6);
+        display: none; align-items: center; justify-content: center; z-index: 10;
+    }
+    #promo.visible { display: flex; }
+    #promo .caja {
+        background: #1a2a6c; border: 2px solid #2a4aac; border-radius: 12px; padding: 20px;
+    }
+    #promo button {
+        font-size: 48px; background: var(--clara); padding: 6px 14px; margin: 4px;
+    }
+    #promo button:hover { background: #fff; }
+</style>
+</head>
+<body>
+    <h2>Ajedrez (2 Jugadores)</h2>
+
+    <div id="capNegras" class="capturadas"></div>
+    <div id="board" class="board"></div>
+    <div id="capBlancas" class="capturadas"></div>
+
+    <div class="info">
+        <p id="status">Turno de las Blancas</p>
+        <button id="btnDeshacer" onclick="deshacer()">Deshacer</button>
+        <button onclick="resetGame()">Nuevo Juego</button>
+    </div>
+
+    <div id="promo">
+        <div class="caja">
+            <p>Elige la pieza para coronar</p>
+            <div id="promoOpciones"></div>
+        </div>
+    </div>
+
+<script>
+    const boardElement = document.getElementById("board");
+    const statusElement = document.getElementById("status");
+
+    // Glifos sólidos para ambos bandos (el color se aplica con CSS).
+    // \uFE0E fuerza la versión de texto (evita que el peón salga como emoji).
+    const GLIFOS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+    const glifo = p => GLIFOS[p.toLowerCase()] + '\uFE0E';
+    const VALOR = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+    const INICIAL = () => [
+        ['r','n','b','q','k','b','n','r'],
+        ['p','p','p','p','p','p','p','p'],
+        ['','','','','','','',''],
+        ['','','','','','','',''],
+        ['','','','','','','',''],
+        ['','','','','','','',''],
+        ['P','P','P','P','P','P','P','P'],
+        ['R','N','B','Q','K','B','N','R']
+    ];
+
+    // ---------- Estado ----------
+    let tablero, turnoBlancas, enroque, alPaso, ultimoMov, capturadas;
+    let piezaSeleccionada, movimientosValidos;
+    let juegoTerminado, promoPendiente, historial = [];
+
+    const esBlanca = p => p !== '' && p === p.toUpperCase();
+    const enTablero = (f, c) => f >= 0 && f < 8 && c >= 0 && c < 8;
+
+    function estadoInicial() {
+        tablero = INICIAL();
+        turnoBlancas = true;
+        enroque = { K: true, Q: true, k: true, q: true };
+        alPaso = null;            // casilla "al paso" {f,c} o null
+        ultimoMov = null;
+        capturadas = { blancas: [], negras: [] }; // piezas capturadas POR cada bando
+        piezaSeleccionada = null;
+        movimientosValidos = [];
+        juegoTerminado = false;
+        promoPendiente = null;
+    }
+
+    function guardarSnapshot() {
+        historial.push(JSON.stringify({
+            tablero, turnoBlancas, enroque, alPaso, ultimoMov, capturadas, juegoTerminado
+        }));
+    }
+
+    function deshacer() {
+        if (promoPendiente || historial.length === 0) return;
+        const s = JSON.parse(historial.pop());
+        ({ tablero, turnoBlancas, enroque, alPaso, ultimoMov, capturadas, juegoTerminado } = s);
+        piezaSeleccionada = null;
+        movimientosValidos = [];
+        actualizarEstado();
+        dibujarTablero();
+    }
+
+    // ---------- Reglas ----------
+    function atacada(tab, f, c, porBlancas) {
+        // Peones
+        const dirP = porBlancas ? 1 : -1; // el peón atacante está una fila "detrás"
+        for (const dc of [-1, 1]) {
+            const ff = f + dirP, cc = c + dc;
+            if (enTablero(ff, cc) && tab[ff][cc] === (porBlancas ? 'P' : 'p')) return true;
+        }
+        // Caballos
+        for (const [df, dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+            const ff = f + df, cc = c + dc;
+            if (enTablero(ff, cc) && tab[ff][cc] === (porBlancas ? 'N' : 'n')) return true;
+        }
+        // Rey
+        for (let df = -1; df <= 1; df++) for (let dc = -1; dc <= 1; dc++) {
+            if (!df && !dc) continue;
+            const ff = f + df, cc = c + dc;
+            if (enTablero(ff, cc) && tab[ff][cc] === (porBlancas ? 'K' : 'k')) return true;
+        }
+        // Piezas deslizantes
+        const deslizantes = (dirs, a, b) => {
+            for (const [df, dc] of dirs) {
+                let ff = f + df, cc = c + dc;
+                while (enTablero(ff, cc)) {
+                    const p = tab[ff][cc];
+                    if (p !== '') {
+                        if (p === (porBlancas ? a : a.toLowerCase()) || p === (porBlancas ? b : b.toLowerCase())) return true;
+                        break;
+                    }
+                    ff += df; cc += dc;
+                }
+            }
+            return false;
+        };
+        if (deslizantes([[1,0],[-1,0],[0,1],[0,-1]], 'R', 'Q')) return true;
+        if (deslizantes([[1,1],[1,-1],[-1,1],[-1,-1]], 'B', 'Q')) return true;
+        return false;
+    }
+
+    function posicionRey(tab, blancas) {
+        const rey = blancas ? 'K' : 'k';
+        for (let f = 0; f < 8; f++) for (let c = 0; c < 8; c++) if (tab[f][c] === rey) return { f, c };
+        return null;
+    }
+
+    function enJaque(tab, blancas) {
+        const r = posicionRey(tab, blancas);
+        return r ? atacada(tab, r.f, r.c, !blancas) : false;
+    }
+
+    // Movimientos sin comprobar si dejan al propio rey en jaque
+    function movimientosPseudo(fila, col, tab = tablero) {
+        const pieza = tab[fila][col];
+        const blanca = esBlanca(pieza);
+        const tipo = pieza.toLowerCase();
+        const movs = [];
+
+        const libreOEnemigo = (f, c) => enTablero(f, c) && (tab[f][c] === '' || esBlanca(tab[f][c]) !== blanca);
+
+        if (tipo === 'p') {
+            const dir = blanca ? -1 : 1;
+            const inicio = blanca ? 6 : 1;
+            if (enTablero(fila + dir, col) && tab[fila + dir][col] === '') {
+                movs.push({ f: fila + dir, c: col });
+                if (fila === inicio && tab[fila + 2 * dir][col] === '') {
+                    movs.push({ f: fila + 2 * dir, c: col, doble: true });
+                }
+            }
+            for (const dc of [-1, 1]) {
+                const f = fila + dir, c = col + dc;
+                if (!enTablero(f, c)) continue;
+                if (tab[f][c] !== '' && esBlanca(tab[f][c]) !== blanca) movs.push({ f, c });
+                else if (alPaso && alPaso.f === f && alPaso.c === c) movs.push({ f, c, alPaso: true });
+            }
+        } else if (tipo === 'n') {
+            for (const [df, dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+                if (libreOEnemigo(fila + df, col + dc)) movs.push({ f: fila + df, c: col + dc });
+            }
+        } else if (tipo === 'k') {
+            for (let df = -1; df <= 1; df++) for (let dc = -1; dc <= 1; dc++) {
+                if ((df || dc) && libreOEnemigo(fila + df, col + dc)) movs.push({ f: fila + df, c: col + dc });
+            }
+            // Enroque
+            const fR = blanca ? 7 : 0;
+            if (fila === fR && col === 4 && !atacada(tab, fR, 4, !blanca)) {
+                const lado = blanca ? ['K', 'Q'] : ['k', 'q'];
+                const torre = blanca ? 'R' : 'r';
+                if (enroque[lado[0]] && tab[fR][7] === torre && tab[fR][5] === '' && tab[fR][6] === ''
+                    && !atacada(tab, fR, 5, !blanca) && !atacada(tab, fR, 6, !blanca)) {
+                    movs.push({ f: fR, c: 6, enroque: 'corto' });
+                }
+                if (enroque[lado[1]] && tab[fR][0] === torre && tab[fR][1] === '' && tab[fR][2] === '' && tab[fR][3] === ''
+                    && !atacada(tab, fR, 3, !blanca) && !atacada(tab, fR, 2, !blanca)) {
+                    movs.push({ f: fR, c: 2, enroque: 'largo' });
+                }
+            }
+        } else {
+            const dirs = [];
+            if (tipo === 'r' || tipo === 'q') dirs.push([1,0],[-1,0],[0,1],[0,-1]);
+            if (tipo === 'b' || tipo === 'q') dirs.push([1,1],[1,-1],[-1,1],[-1,-1]);
+            for (const [df, dc] of dirs) {
+                let f = fila + df, c = col + dc;
+                while (enTablero(f, c)) {
+                    if (tab[f][c] === '') movs.push({ f, c });
+                    else {
+                        if (esBlanca(tab[f][c]) !== blanca) movs.push({ f, c });
+                        break;
+                    }
+                    f += df; c += dc;
+                }
+            }
+        }
+        return movs;
+    }
+
+    // Aplica un movimiento sobre una copia del tablero (para simular)
+    function simular(tab, desde, mov) {
+        const t = tab.map(r => r.slice());
+        const pieza = t[desde.f][desde.c];
+        t[mov.f][mov.c] = pieza;
+        t[desde.f][desde.c] = '';
+        if (mov.alPaso) t[desde.f][mov.c] = '';
+        if (mov.enroque === 'corto') { t[mov.f][5] = t[mov.f][7]; t[mov.f][7] = ''; }
+        if (mov.enroque === 'largo') { t[mov.f][3] = t[mov.f][0]; t[mov.f][0] = ''; }
+        return t;
+    }
+
+    function obtenerMovimientosValidos(fila, col) {
+        const blanca = esBlanca(tablero[fila][col]);
+        return movimientosPseudo(fila, col).filter(m =>
+            !enJaque(simular(tablero, { f: fila, c: col }, m), blanca)
+        );
+    }
+
+    function hayMovimientosLegales(blancas) {
+        for (let f = 0; f < 8; f++) for (let c = 0; c < 8; c++) {
+            const p = tablero[f][c];
+            if (p !== '' && esBlanca(p) === blancas && obtenerMovimientosValidos(f, c).length) return true;
+        }
+        return false;
+    }
+
+    function materialInsuficiente() {
+        const piezas = [];
+        for (let f = 0; f < 8; f++) for (let c = 0; c < 8; c++) {
+            const p = tablero[f][c];
+            if (p && p.toLowerCase() !== 'k') piezas.push({ t: p.toLowerCase(), f, c });
+        }
+        if (piezas.length === 0) return true;
+        if (piezas.length === 1 && (piezas[0].t === 'b' || piezas[0].t === 'n')) return true;
+        if (piezas.length === 2 && piezas.every(p => p.t === 'b')) {
+            return (piezas[0].f + piezas[0].c) % 2 === (piezas[1].f + piezas[1].c) % 2;
+        }
+        return false;
+    }
+
+    // ---------- Jugar ----------
+    function moverPieza(desdeF, desdeC, mov) {
+        guardarSnapshot();
+        const pieza = tablero[desdeF][desdeC];
+        const blanca = esBlanca(pieza);
+        const tipo = pieza.toLowerCase();
+
+        // Captura
+        let capt = tablero[mov.f][mov.c];
+        if (mov.alPaso) capt = tablero[desdeF][mov.c];
+        if (capt) (blanca ? capturadas.blancas : capturadas.negras).push(capt);
+
+        tablero = simular(tablero, { f: desdeF, c: desdeC }, mov);
+
+        // Derechos de enroque
+        if (tipo === 'k') { blanca ? (enroque.K = enroque.Q = false) : (enroque.k = enroque.q = false); }
+        const toca = (f, c) => {
+            if (f === 7 && c === 0) enroque.Q = false;
+            if (f === 7 && c === 7) enroque.K = false;
+            if (f === 0 && c === 0) enroque.q = false;
+            if (f === 0 && c === 7) enroque.k = false;
+        };
+        toca(desdeF, desdeC); toca(mov.f, mov.c);
+
+        // Casilla al paso
+        alPaso = mov.doble ? { f: (desdeF + mov.f) / 2, c: mov.c } : null;
+
+        ultimoMov = { de: { f: desdeF, c: desdeC }, a: { f: mov.f, c: mov.c } };
+        piezaSeleccionada = null;
+        movimientosValidos = [];
+
+        // Coronación
+        if (tipo === 'p' && (mov.f === 0 || mov.f === 7)) {
+            promoPendiente = { f: mov.f, c: mov.c, blanca };
+            mostrarPromocion(blanca);
+            dibujarTablero();
+            return;
+        }
+        terminarTurno();
+    }
+
+    function mostrarPromocion(blanca) {
+        const cont = document.getElementById('promoOpciones');
+        cont.innerHTML = '';
+        for (const t of ['q', 'r', 'b', 'n']) {
+            const b = document.createElement('button');
+            b.textContent = glifo(t);
+            b.className = blanca ? 'pieza-blanca' : 'pieza-negra';
+            b.onclick = () => {
+                tablero[promoPendiente.f][promoPendiente.c] = blanca ? t.toUpperCase() : t;
+                promoPendiente = null;
+                document.getElementById('promo').classList.remove('visible');
+                terminarTurno();
+            };
+            cont.appendChild(b);
+        }
+        document.getElementById('promo').classList.add('visible');
+    }
+
+    function terminarTurno() {
+        turnoBlancas = !turnoBlancas;
+        actualizarEstado();
+        dibujarTablero();
+    }
+
+    function actualizarEstado() {
+        const jaque = enJaque(tablero, turnoBlancas);
+        const hayMovs = hayMovimientosLegales(turnoBlancas);
+        const nombre = turnoBlancas ? 'las Blancas' : 'las Negras';
+        juegoTerminado = true;
+        if (!hayMovs && jaque) {
+            statusElement.innerText = `¡Jaque mate! Ganan ${turnoBlancas ? 'las Negras' : 'las Blancas'}`;
+        } else if (!hayMovs) {
+            statusElement.innerText = 'Tablas por rey ahogado';
+        } else if (materialInsuficiente()) {
+            statusElement.innerText = 'Tablas por material insuficiente';
+        } else {
+            juegoTerminado = false;
+            statusElement.innerText = `Turno de ${nombre}` + (jaque ? ' — ¡Jaque!' : '');
+        }
+        document.getElementById('btnDeshacer').disabled = historial.length === 0;
+    }
+
+    function manejarClick(fila, col) {
+        if (juegoTerminado || promoPendiente) return;
+        const piezaActual = tablero[fila][col];
+
+        if (piezaSeleccionada) {
+            const mov = movimientosValidos.find(m => m.f === fila && m.c === col);
+            if (mov) { moverPieza(piezaSeleccionada.f, piezaSeleccionada.c, mov); return; }
+        }
+
+        if (piezaActual !== '' && esBlanca(piezaActual) === turnoBlancas) {
+            if (piezaSeleccionada && piezaSeleccionada.f === fila && piezaSeleccionada.c === col) {
+                piezaSeleccionada = null; movimientosValidos = [];
+            } else {
+                piezaSeleccionada = { f: fila, c: col };
+                movimientosValidos = obtenerMovimientosValidos(fila, col);
+            }
+        } else {
+            piezaSeleccionada = null;
+            movimientosValidos = [];
+        }
+        dibujarTablero();
+    }
+
+    // ---------- Dibujo ----------
+    function dibujarCapturadas() {
+        const orden = arr => arr.slice().sort((a, b) => VALOR[b.toLowerCase()] - VALOR[a.toLowerCase()]);
+        const pinta = (arr, clase) => orden(arr).map(p => `<span class="${clase}">${glifo(p)}</span>`).join('');
+        document.getElementById('capBlancas').innerHTML = pinta(capturadas.blancas, 'pieza-negra');
+        document.getElementById('capNegras').innerHTML = pinta(capturadas.negras, 'pieza-blanca');
+        // Las capturas se ven sobre fondo oscuro: ajustar la legibilidad de las negras
+        document.querySelectorAll('#capBlancas .pieza-negra').forEach(e => {
+            e.style.color = '#000'; e.style.textShadow = '0 0 2px #fff, 0 0 2px #fff';
+        });
+    }
+
+    function dibujarTablero() {
+        boardElement.innerHTML = '';
+        const rey = posicionRey(tablero, turnoBlancas);
+        const reyEnJaque = rey && enJaque(tablero, turnoBlancas);
+
+        for (let f = 0; f < 8; f++) {
+            for (let c = 0; c < 8; c++) {
+                const cell = document.createElement('div');
+                cell.classList.add('cell', (f + c) % 2 === 0 ? 'clara' : 'oscura');
+
+                if (ultimoMov && ((ultimoMov.de.f === f && ultimoMov.de.c === c) || (ultimoMov.a.f === f && ultimoMov.a.c === c))) {
+                    cell.classList.add('ultimo');
+                }
+                if (piezaSeleccionada && piezaSeleccionada.f === f && piezaSeleccionada.c === c) cell.classList.add('selected');
+                if (reyEnJaque && rey.f === f && rey.c === c) cell.classList.add('jaque');
+
+                const mv = movimientosValidos.find(m => m.f === f && m.c === c);
+                if (mv) cell.classList.add(tablero[f][c] !== '' || mv.alPaso ? 'captura' : 'move');
+
+                if (c === 0) { const n = document.createElement('span'); n.className = 'coord num'; n.textContent = 8 - f; cell.appendChild(n); }
+                if (f === 7) { const l = document.createElement('span'); l.className = 'coord let'; l.textContent = 'abcdefgh'[c]; cell.appendChild(l); }
+
+                const pieza = tablero[f][c];
+                if (pieza !== '') {
+                    const s = document.createElement('span');
+                    s.className = 'pz ' + (esBlanca(pieza) ? 'pieza-blanca' : 'pieza-negra');
+                    s.textContent = glifo(pieza);
+                    cell.appendChild(s);
+                }
+
+                cell.addEventListener('click', () => manejarClick(f, c));
+                boardElement.appendChild(cell);
+            }
+        }
+        dibujarCapturadas();
+        document.getElementById('btnDeshacer').disabled = historial.length === 0 || !!promoPendiente;
+    }
+
+    function resetGame() {
+        historial = [];
+        document.getElementById('promo').classList.remove('visible');
+        estadoInicial();
+        statusElement.innerText = 'Turno de las Blancas';
+        dibujarTablero();
+    }
+
+    resetGame();
+</script>
+</body>
+</html>
